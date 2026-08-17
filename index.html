@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Direcht</title>
+  <style>
+    :root { --accent: #bf616a; --accent-dark: #8f3e49; --ink: #eff5ff; --muted: #aebbd2; --panel: #16213e; --surface: #0f3460; --line: rgba(191, 97, 106, .28); --success: #53d769; --warning: #f5a623; }
+    * { box-sizing: border-box; }
+    body { min-width: 320px; margin: 0; padding: 32px 16px; color: var(--ink); font-family: Georgia, 'Times New Roman', serif; background: radial-gradient(circle at 8% 2%, #28477a 0, transparent 32rem), linear-gradient(145deg, #101628, #14294c); }
+    button, input { font: inherit; }
+    button { min-height: 44px; border: 0; border-radius: 6px; padding: 10px 14px; color: #fff; background: var(--accent); cursor: pointer; font-weight: 700; transition: background .2s, transform .2s, box-shadow .2s; }
+    button:hover:not(:disabled) { background: var(--accent-dark); transform: translateY(-1px); box-shadow: 0 5px 16px rgba(0, 0, 0, .25); }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    button:focus-visible, input:focus-visible { outline: 3px solid var(--warning); outline-offset: 3px; }
+    .app-header, .container { width: min(100%, 760px); margin: 0 auto; }
+    .app-header { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 0 4px 24px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { color: #fff; font-size: 2.4rem; letter-spacing: 0; }
+    .subtitle { margin-top: 4px; color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; }
+    .version { flex: none; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font: 700 .75rem ui-sans-serif, system-ui, sans-serif; }
+    .card { margin-bottom: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: rgba(22, 33, 62, .93); box-shadow: 0 16px 32px rgba(0, 0, 0, .12); }
+    .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .card h2 { color: #fff; font: 700 1.05rem ui-sans-serif, system-ui, sans-serif; }
+    .step { color: var(--warning); font-size: .78rem; text-transform: uppercase; }
+    label { display: block; margin: 0 0 7px; color: var(--muted); font: 650 .86rem ui-sans-serif, system-ui, sans-serif; }
+    input { width: 100%; min-height: 44px; margin: 0; padding: 10px 12px; border: 1px solid #31527f; border-radius: 6px; color: var(--ink); background: #102c54; }
+    input:focus { border-color: var(--warning); background: #143562; }
+    .field + .field { margin-top: 14px; }
+    .peer-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .id-display { color: var(--success); cursor: copy; font-size: 1rem; }
+    .row { display: flex; gap: 8px; align-items: stretch; }
+    .row input { flex: 1; min-width: 0; }
+    .btn-secondary { background: #485568; }
+    .btn-danger { background: #8e3540; }
+    .status { display: inline-flex; margin-top: 12px; padding: 6px 9px; border-radius: 4px; font: 650 .82rem ui-sans-serif, system-ui, sans-serif; }
+    .status.connected { color: var(--success); background: rgba(83, 215, 105, .12); }
+    .status.disconnected { color: #f3a4ab; background: rgba(191, 97, 106, .12); }
+    .status.waiting { color: var(--warning); background: rgba(245, 166, 35, .12); }
+    .chat-card[data-state='idle'] { opacity: .76; }
+    .chat-card[data-state='idle'] .chat-input-container, .chat-card[data-state='idle'] .transfer-progress, .chat-card[data-state='idle'] #typingIndicator, .chat-card[data-state='idle'] #messages, .chat-card[data-state='idle'] .history-note { display: none; }
+    .empty-state { min-height: 210px; display: grid; place-content: center; gap: 8px; padding: 28px; border: 1px dashed #46678f; border-radius: 6px; color: var(--muted); text-align: center; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .empty-state strong { color: var(--ink); }
+    .chat-card[data-state='connected'] .empty-state { display: none; }
+    #messages { height: 350px; overflow-y: auto; padding: 12px; border: 1px solid rgba(191, 97, 106, .18); border-radius: 6px; background: rgba(7, 20, 45, .48); }
+    .msg { width: fit-content; max-width: 78%; margin: 0 0 8px; padding: 10px 12px; border-radius: 6px; overflow-wrap: anywhere; animation: slide-in .2s ease-out; }
+    @keyframes slide-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .msg.sent { margin-left: auto; background: #244776; text-align: right; }
+    .msg.received { border: 1px solid var(--line); background: #1a2948; }
+    .msg .meta, .history-note, #typingIndicator { margin-top: 5px; color: var(--muted); font: .75rem ui-sans-serif, system-ui, sans-serif; }
+    .system-msg { margin: 10px 0; color: var(--muted); text-align: center; font: .8rem ui-sans-serif, system-ui, sans-serif; }
+    .history-note { margin-top: 8px; }
+    #typingIndicator { min-height: 26px; padding: 7px 2px; font-style: italic; }
+    .transfer-progress { display: none; margin: 8px 0; }
+    .transfer-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 5px; color: var(--muted); font: .78rem ui-sans-serif, system-ui, sans-serif; }
+    .progress { height: 7px; overflow: hidden; border-radius: 4px; background: #0b2344; }
+    .progress-bar { width: 0; height: 100%; background: var(--warning); transition: width .2s; }
+    .chat-input-container { display: flex; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; border: 1px solid rgba(191, 97, 106, .18); border-radius: 6px; background: rgba(15, 52, 96, .5); }
+    .chat-input-container.is-dragging { border-color: var(--warning); background: rgba(245, 166, 35, .1); }
+    .chat-input-container input { flex: 1; }
+    .icon-btn { display: inline-grid; flex: 0 0 44px; place-items: center; width: 44px; padding: 0; }
+    .icon-btn svg { width: 19px; height: 19px; }
+    .modal { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; padding: 16px; background: rgba(4, 8, 20, .82); }
+    .modal.is-open { display: flex; }
+    .modal-panel { width: min(100%, 400px); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 20px 50px rgba(0, 0, 0, .45); }
+    .modal-panel h3 { margin-bottom: 8px; color: #fff; font: 700 1.2rem ui-sans-serif, system-ui, sans-serif; }
+    .modal-panel p { color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.5; }
+    #qr-reader { margin-top: 16px; overflow: hidden; border-radius: 6px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .toast { position: fixed; z-index: 20; right: 16px; bottom: 16px; max-width: min(360px, calc(100% - 32px)); padding: 11px 14px; border: 1px solid rgba(83, 215, 105, .38); border-radius: 6px; color: #eaffee; background: #173f31; box-shadow: 0 8px 24px rgba(0, 0, 0, .32); font-family: ui-sans-serif, system-ui, sans-serif; }
+    .toast[hidden] { display: none; }
+    @media (max-width: 560px) { body { padding: 18px 12px; } .app-header { align-items: start; padding-bottom: 18px; } h1 { font-size: 2rem; } .card { padding: 16px; } .row { flex-wrap: wrap; } .row input { flex-basis: 100%; } .row button { flex: 1; } .msg { max-width: 90%; } #messages { height: min(48vh, 350px); } .chat-input-container { flex-wrap: wrap; } .chat-input-container input { flex-basis: calc(100% - 52px); } .chat-input-container .icon-btn:last-child { margin-left: auto; } }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div><h1>Direcht</h1><p class="subtitle">Private browser-to-browser chat via WebRTC</p></div>
+    <span class="version">v1.3.0</span>
+  </header>
+
+  <main class="container">
+    <section class="card" aria-labelledby="identityHeading">
+      <div class="card-header"><span class="step">Step 1</span><h2 id="identityHeading">Your identity</h2></div>
+      <div class="field"><label for="usernameInput">Display name</label><input type="text" id="usernameInput" placeholder="Enter your name" onchange="saveUsername()" onkeydown="if(event.key==='Enter') saveUsername()"></div>
+      <div class="field"><label for="myId">Your Peer ID</label><p id="myIdLoading" class="status waiting">Connecting to signaling...</p><input type="text" id="myId" class="id-display" style="display:none" title="Click to copy your Peer ID" readonly aria-describedby="copyHint"><p id="copyHint" class="history-note">Share this ID or its QR code with the person you want to chat with.</p></div>
+      <div id="qrcodeContainer" style="display:none; margin-top:14px; text-align:center;"><div id="qrcode" style="display:inline-block; padding:10px; background:#0a1f3e; border-radius:6px;"></div></div>
+    </section>
+
+    <section class="card" aria-labelledby="connectHeading">
+      <div class="card-header"><span class="step">Step 2</span><h2 id="connectHeading">Connect to a peer</h2></div>
+      <label for="peerId">Their Peer ID</label>
+      <div class="row"><input type="text" id="peerId" class="peer-id" placeholder="Paste their Peer ID" onkeydown="if(event.key==='Enter') toggleConnection()"><button id="scanQRBtn" class="btn-secondary" type="button" onclick="openQRScanner()" title="Scan a Peer ID QR code">Scan QR</button><button id="toggleConnBtn" type="button" onclick="toggleConnection()">Connect</button></div>
+      <p id="connStatus" class="status disconnected" role="status" aria-live="polite" aria-atomic="true">Waiting for a connection</p>
+    </section>
+
+    <section class="card chat-card" id="chatArea" data-state="idle" aria-labelledby="chatHeading">
+      <div class="card-header"><span class="step">Step 3</span><h2 id="chatHeading">Chat</h2></div>
+      <div class="empty-state" id="chatEmptyState"><strong>Ready when you are</strong><span>Connect to a peer above to start a private conversation.</span></div>
+      <div id="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+      <p class="history-note">Recent messages are stored on this device and cleared when you disconnect.</p>
+      <div id="typingIndicator" role="status" aria-live="polite" aria-atomic="true" hidden><span id="typingName">Peer</span> is typing...</div>
+      <div class="transfer-progress" id="progress" aria-live="polite"><div class="transfer-meta"><span id="progressName">Preparing transfer</span><span id="progressText">0%</span></div><div class="progress" id="progressTrack" role="progressbar" aria-label="File transfer progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-bar" id="progressBar"></div></div></div>
+      <div class="chat-input-container" id="chatInputContainer">
+        <input type="text" id="msgInput" placeholder="Type a message" disabled onkeydown="if(event.key==='Enter') sendMessage()" oninput="onMessageInput()" onblur="onMessageInputBlur()">
+        <button class="icon-btn" id="sendBtn" type="button" disabled onclick="sendMessage()" aria-label="Send message" title="Send message"><i data-lucide="send"></i></button>
+        <input type="file" id="fileInput" hidden onchange="sendFile()">
+        <button class="icon-btn" id="fileBtn" type="button" disabled onclick="document.getElementById('fileInput').click()" aria-label="Attach a file" title="Attach a file"><i data-lucide="paperclip"></i></button>
+        <button class="icon-btn" id="clearHistoryBtn" type="button" onclick="openClearHistoryDialog()" aria-label="Clear chat history" title="Clear chat history"><i data-lucide="trash-2"></i></button>
+      </div>
+    </section>
+  </main>
+
+  <div id="qrModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="qrModalTitle" aria-describedby="qrModalDescription" hidden>
+    <div class="modal-panel"><h3 id="qrModalTitle">Scan Peer QR Code</h3><p id="qrModalDescription">Point your camera at the other person's QR code.</p><div id="qr-reader"></div><div class="modal-actions"><button id="closeQrBtn" type="button" class="btn-secondary" onclick="closeQRScanner()">Cancel</button></div></div>
+  </div>
+  <div id="clearHistoryModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="clearHistoryTitle" aria-describedby="clearHistoryDescription" hidden>
+    <div class="modal-panel"><h3 id="clearHistoryTitle">Clear local history?</h3><p id="clearHistoryDescription">Messages stored on this device will be removed and cannot be recovered.</p><div class="modal-actions"><button id="cancelClearBtn" type="button" class="btn-secondary" onclick="closeClearHistoryDialog()">Cancel</button><button type="button" class="btn-danger" onclick="confirmClearChatHistory()">Clear history</button></div></div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

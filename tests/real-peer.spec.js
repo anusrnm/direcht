@@ -53,7 +53,7 @@ test.describe('Direcht real PeerJS connection', () => {
     }
   });
 
-  test('recovers real peers after the remote side disconnects', async ({ browser }) => {
+  test('manually reconnects real peers after the remote side disconnects', async ({ browser }) => {
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
     const pageA = await contextA.newPage();
@@ -67,14 +67,13 @@ test.describe('Direcht real PeerJS connection', () => {
       await pageB.locator('#toggleConnBtn').click();
       await expect(pageB.locator('#connStatus')).toHaveText('Disconnected');
 
-      const statusA = await pageA.locator('#connStatus').textContent();
-      if (/Connecting|Reconnecting/.test(statusA)) {
-        await expect(pageA.locator('#connStatus')).toHaveText('Connected', { timeout: 30000 });
-      } else if (statusA === 'Disconnected') {
-        await pageA.locator('#peerId').fill(peerIdB);
+      if (await pageA.locator('#connStatus').textContent() === 'Connected') {
         await pageA.locator('#toggleConnBtn').click();
-        await expect(pageA.locator('#connStatus')).toHaveText('Connected', { timeout: 30000 });
       }
+      await expect(pageA.locator('#connStatus')).toHaveText('Disconnected', { timeout: 10000 });
+      await pageA.locator('#peerId').fill(peerIdB);
+      await pageA.locator('#toggleConnBtn').click();
+      await expect(pageA.locator('#connStatus')).toHaveText('Connected', { timeout: 30000 });
       await expect(pageB.locator('#connStatus')).toHaveText('Connected', { timeout: 30000 });
     } finally {
       await Promise.all([contextA.close(), contextB.close()]);

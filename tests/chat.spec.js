@@ -177,16 +177,15 @@ test.describe('Direcht chat', () => {
     await expect(page.locator('#peerId')).toHaveValue('remote-peer-id');
   });
 
-  test('reconnects after the active peer closes the data channel', async ({ page }) => {
+  test('reports an active peer closing without automatic reconnect', async ({ page }) => {
     await openApp(page);
     await connect(page);
 
     await page.evaluate(() => window.__mockPeer.lastConnection.emit('close'));
-    await expect(page.locator('#connStatus')).toHaveText(/Reconnecting/);
+    await expect(page.locator('#connStatus')).toHaveText('Disconnected');
     await page.waitForTimeout(1100);
-    await expect.poll(() => page.evaluate(() => window.__mockPeer.lastConnection?.peer)).toBe('remote-peer-id');
-    await page.evaluate(() => window.__mockPeer.lastConnection.emit('open'));
-    await expect(page.locator('#connStatus')).toHaveText('Connected');
+    await expect.poll(() => page.evaluate(() => window.__mockPeer.reconnectCalls)).toBe(0);
+    await expect(page.locator('#toggleConnBtn')).toHaveText('Connect');
   });
 
   test('ignores data from a replaced stale connection', async ({ page }) => {

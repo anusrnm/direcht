@@ -7,7 +7,6 @@ const CHUNK_SIZE = 64 * 1024; // 64KB chunks for file transfer
 const MAX_FILE_SIZE = 250 * 1024 * 1024;
 const CONNECTION_TIMEOUT_MS = 15000;
 const SEND_BUFFER_WAIT_TIMEOUT_MS = 10000;
-const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000];
 const STORAGE_PREFIX = 'direcht';
 const USERNAME_STORAGE_KEY = `${STORAGE_PREFIX}-username`;
 const HISTORY_STORAGE_KEY = `${STORAGE_PREFIX}-history`;
@@ -15,10 +14,6 @@ const PEER_ID_STORAGE_KEY = `${STORAGE_PREFIX}-last-peer-id`;
 const MESSAGE_QUEUE_STORAGE_KEY = `${STORAGE_PREFIX}-pending-messages`;
 const RECEIVED_MESSAGE_STORAGE_KEY = `${STORAGE_PREFIX}-received-message-ids`;
 let connectionAttemptTimer = null;
-let reconnectTimer = null;
-let reconnectAttempt = 0;
-let reconnecting = false;
-let manualDisconnect = false;
 let lastFocusedElement = null;
 
 function updateConnectionUi(state, message = '') {
@@ -60,13 +55,6 @@ function setChatState(isConnected) {
 function clearConnectionAttempt() {
   clearTimeout(connectionAttemptTimer);
   connectionAttemptTimer = null;
-}
-
-function clearReconnectAttempt() {
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-  reconnectAttempt = 0;
-  reconnecting = false;
 }
 
 function startConnectionAttempt(activeConn) {
@@ -154,34 +142,10 @@ function sendPendingMessages(activeConn) {
   });
 }
 
-function scheduleReconnect() {
-  if (manualDisconnect || reconnectTimer || conn || !remotePeerId || peer?.destroyed) return;
-  const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
-  reconnectAttempt += 1;
-  reconnecting = true;
-  updateConnectionUi('waiting', `Reconnecting... attempt ${reconnectAttempt}`);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    if (manualDisconnect) {
-      reconnecting = false;
-      return;
-    }
-    if (peer?.open) {
-      connectToPeer(true);
-    } else if (peer && !peer.destroyed) {
-      peer.reconnect();
-      scheduleReconnect();
-    }
-  }, delay);
-}
-
 // Initialize Peer
 peer = new Peer(); // auto-generated ID, free PeerJS cloud for signaling
 
 peer.on('open', (id) => {
-  const wasReconnecting = reconnecting;
-  reconnectAttempt = 0;
-  reconnecting = false;
   dom.myIdLoading.style.display = 'none';
   const el = dom.myId;
   el.style.display = 'block';
@@ -200,8 +164,8 @@ peer.on('open', (id) => {
   dom.usernameInput.value = myUsername;
   if (hasActiveConnection()) {
     updateConnectionUi('connected', 'Connected');
-  } else if (!conn && !manualDisconnect) {
-    updateConnectionUi('disconnected', wasReconnecting ? 'Ready to reconnect' : 'Ready to connect');
+  } else if (!conn) {
+    updateConnectionUi('disconnected', 'Ready to connect');
   }
 });
 
@@ -220,23 +184,14 @@ peer.on('error', (err) => {
   pendingConnection?.close();
   const message = err?.type ? `${err.type}: ${err.message || 'Unknown error'}` : 'Connection error';
   updateConnectionUi('disconnected', message);
-  if (!manualDisconnect) scheduleReconnect();
 });
 
 peer.on('disconnected', () => {
-  if (manualDisconnect) return;
-
   if (hasActiveConnection()) {
-    updateConnectionUi('connected', 'Reconnected');
+    updateConnectionUi('connected', 'Connected (signaling disconnected)');
   } else {
-    updateConnectionUi('waiting', 'Reconnecting to signaling...');
+    updateConnectionUi('disconnected', 'Signaling disconnected');
   }
-
-  // Best effort reconnect to signaling server.
-  if (!manualDisconnect && peer && !peer.destroyed) {
-    peer.reconnect();
-  }
-  if (!hasActiveConnection()) scheduleReconnect();
 });
 
 peer.on('close', () => {
@@ -245,16 +200,11 @@ peer.on('close', () => {
     clearConnectionAttempt();
     resetTransientUi();
     updateConnectionUi('disconnected', 'Peer closed');
-    if (!manualDisconnect) scheduleReconnect();
   }
 });
 
 // Accept incoming connections
 peer.on('connection', (incoming) => {
-  // A manual disconnect stops automatic retries, but does not reject a new
-  // connection initiated explicitly by the other peer.
-  manualDisconnect = false;
-
   if (conn && conn !== incoming) {
     if (conn.open) {
       incoming.close();
@@ -263,7 +213,6 @@ peer.on('connection', (incoming) => {
     conn.close();
   }
   clearConnectionAttempt();
-  clearReconnectAttempt();
   conn = incoming;
   remotePeerId = incoming.peer;
   dom.peerId.value = remotePeerId;
@@ -283,9 +232,7 @@ function toggleConnection() {
   }
 }
 
-function connectToPeer(isAutomatic = false) {
-  if (isAutomatic && manualDisconnect) return;
-
+function connectToPeer() {
   const peerIdInput = dom.peerId;
   const remoteId = peerIdInput.value.trim();
   if (!remoteId) {
@@ -299,10 +246,6 @@ function connectToPeer(isAutomatic = false) {
     updateConnectionUi('disconnected', 'Signaling is not ready yet. Please try again shortly.');
     return;
   }
-  if (!isAutomatic) {
-    manualDisconnect = false;
-    clearReconnectAttempt();
-  }
   updateConnectionUi('waiting', 'Connecting...');
   try {
     const outgoing = peer.connect(remoteId, { reliable: true });
@@ -314,7 +257,6 @@ function connectToPeer(isAutomatic = false) {
     conn = null;
     clearConnectionAttempt();
     updateConnectionUi('disconnected', 'Could not start the connection. Try again.');
-    if (isAutomatic) scheduleReconnect();
   }
 }
 
@@ -323,7 +265,6 @@ function setupConnection(activeConn) {
   activeConn.on('open', () => {
     if (conn !== activeConn) return;
     clearConnectionAttempt();
-    clearReconnectAttempt();
     dom.peerId.value = activeConn.peer;
     remotePeerId = activeConn.peer;
     localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
@@ -389,7 +330,6 @@ function setupConnection(activeConn) {
     updateConnectionUi('disconnected', 'Disconnected');
     addSystemMsg('Peer disconnected.');
     peerUsername = 'Peer';
-    if (!manualDisconnect) scheduleReconnect();
   });
 
   activeConn.on('error', (err) => {
@@ -399,7 +339,6 @@ function setupConnection(activeConn) {
     resetTransientUi();
     updateConnectionUi('disconnected', 'Connection error');
     addSystemMsg('Connection error: ' + err);
-    if (!manualDisconnect) scheduleReconnect();
   });
 }
 
@@ -513,11 +452,9 @@ function onMessageInputBlur() {
   clearTimeout(typingRefreshTimer);
 }
 function disconnectPeer() {
-  manualDisconnect = true;
   const activeConn = conn;
   conn = null;
   clearConnectionAttempt();
-  clearReconnectAttempt();
   pendingMessages.clear();
   persistPendingMessages();
   resetTransientUi();
@@ -850,7 +787,6 @@ window.addEventListener('pagehide', () => {
   const activeConn = conn;
   conn = null;
   clearConnectionAttempt();
-  clearReconnectAttempt();
   activeConn?.close();
   if (peer && !peer.destroyed) peer.disconnect();
 });

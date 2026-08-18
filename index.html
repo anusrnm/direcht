@@ -713,7 +713,7 @@
           title="Send message"><i data-lucide="send"></i></button>
         <input type="file" id="fileInput" hidden onchange="sendFile()">
         <button class="icon-btn" id="fileBtn" type="button" disabled
-          onclick="document.getElementById('fileInput').click()" aria-label="Attach a file" title="Attach a file"><i
+          onclick="openFilePicker()" aria-label="Attach a file" title="Attach a file"><i
             data-lucide="paperclip"></i></button>
         <button class="icon-btn" id="clearHistoryBtn" type="button" onclick="openClearHistoryDialog()"
           aria-label="Clear chat history" title="Clear chat history"><i data-lucide="trash-2"></i></button>
@@ -747,6 +747,7 @@
   <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="dom.js"></script>
   <script src="app.js"></script>
 </body>
 

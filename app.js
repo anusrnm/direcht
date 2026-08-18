@@ -9,8 +9,8 @@ let connectionAttemptTimer = null;
 let lastFocusedElement = null;
 
 function updateConnectionUi(state, message = '') {
-  const statusEl = document.getElementById('connStatus');
-  const btn = document.getElementById('toggleConnBtn');
+  const statusEl = dom.connStatus;
+  const btn = dom.toggleConnBtn;
   const isConnected = state === 'connected';
 
   statusEl.className = 'status ' + state;
@@ -37,11 +37,11 @@ function updateConnectionUi(state, message = '') {
 }
 
 function setChatState(isConnected) {
-  const chatArea = document.getElementById('chatArea');
+  const chatArea = dom.chatArea;
   chatArea.dataset.state = isConnected ? 'connected' : 'idle';
-  document.getElementById('msgInput').disabled = !isConnected;
-  document.getElementById('sendBtn').disabled = !isConnected;
-  document.getElementById('fileBtn').disabled = !isConnected;
+  dom.msgInput.disabled = !isConnected;
+  dom.sendBtn.disabled = !isConnected;
+  dom.fileBtn.disabled = !isConnected;
 }
 
 function clearConnectionAttempt() {
@@ -63,7 +63,7 @@ function resetTransientUi() {
   clearTimeout(typingTimeout);
   peerIsTyping = false;
   typingSent = false;
-  document.getElementById('typingIndicator').hidden = true;
+  dom.typingIndicator.hidden = true;
   showProgress(false);
 }
 
@@ -101,8 +101,8 @@ let isSendingFile = false;
 peer = new Peer(); // auto-generated ID, free PeerJS cloud for signaling
 
 peer.on('open', (id) => {
-  document.getElementById('myIdLoading').style.display = 'none';
-  const el = document.getElementById('myId');
+  dom.myIdLoading.style.display = 'none';
+  const el = dom.myId;
   el.style.display = 'block';
   el.value = id;
   el.onclick = async () => {
@@ -116,8 +116,12 @@ peer.on('open', (id) => {
     }
   };
   generateQRCode(id);
-  document.getElementById('usernameInput').value = myUsername;
-  if (!conn) updateConnectionUi('disconnected', 'Ready to connect');
+  dom.usernameInput.value = myUsername;
+  if (hasActiveConnection()) {
+    updateConnectionUi('connected', 'Connected');
+  } else if (!conn) {
+    updateConnectionUi('disconnected', 'Ready to connect');
+  }
 });
 
 peer.on('error', (err) => {
@@ -139,7 +143,7 @@ peer.on('error', (err) => {
 
 peer.on('disconnected', () => {
   if (hasActiveConnection()) {
-    updateConnectionUi('connected', 'Connected (reconnecting signaling...)');
+    updateConnectionUi('connected', 'Reconnected');
   } else {
     updateConnectionUi('waiting', 'Reconnecting to signaling...');
   }
@@ -180,11 +184,13 @@ function toggleConnection() {
 }
 
 function connectToPeer() {
-  const remoteId = document.getElementById('peerId').value.trim();
+  const peerIdInput = dom.peerId;
+  const remoteId = peerIdInput.value.trim();
   if (!remoteId) {
     updateConnectionUi('disconnected', 'Enter a Peer ID to connect.');
     return;
   }
+  peerIdInput.value = remoteId;
   if (!peer?.open) {
     updateConnectionUi('disconnected', 'Signaling is not ready yet. Please try again shortly.');
     return;
@@ -208,6 +214,7 @@ function setupConnection(activeConn) {
   activeConn.on('open', () => {
     if (conn !== activeConn) return;
     clearConnectionAttempt();
+    dom.peerId.value = activeConn.peer;
     updateConnectionUi('connected', 'Connected');
     activeConn.send({ type: 'username', name: myUsername });
   });
@@ -215,19 +222,19 @@ function setupConnection(activeConn) {
   activeConn.on('data', (data) => {
     if (data.type === 'username') {
       peerUsername = data.name;
-      document.getElementById('typingName').textContent = peerUsername;
+      dom.typingName.textContent = peerUsername;
       addSystemMsg(peerUsername + ' connected');
     } else if (data.type === 'typing') {
       peerIsTyping = true;
-      document.getElementById('typingIndicator').hidden = false;
+      dom.typingIndicator.hidden = false;
       clearTimeout(typingTimeout);
       typingTimeout = setTimeout(() => {
         peerIsTyping = false;
-        document.getElementById('typingIndicator').hidden = true;
+        dom.typingIndicator.hidden = true;
       }, 2000);
     } else if (typeof data === 'string') {
       peerIsTyping = false;
-      document.getElementById('typingIndicator').hidden = true;
+      dom.typingIndicator.hidden = true;
       addMsg(data, 'received', peerUsername);
     } else if (data.type === 'file-meta') {
       globalThis._incomingFile = {
@@ -282,7 +289,7 @@ function setupConnection(activeConn) {
 
 // Send text message
 function sendMessage() {
-  const input = document.getElementById('msgInput');
+  const input = dom.msgInput;
   const text = input.value.trim();
   if (!text || !conn?.open) return;
   conn.send(text);
@@ -290,7 +297,7 @@ function sendMessage() {
   saveToHistory({ type: 'text', author: 'You', text, timestamp: new Date().toISOString() });
   input.value = '';
   peerIsTyping = false;
-  document.getElementById('typingIndicator').hidden = true;
+  dom.typingIndicator.hidden = true;
 }
 
 // Detect typing and send typing indicator
@@ -298,7 +305,7 @@ let typingSent = false;
 function onMessageInput() {
   if (!conn?.open) return;
   
-  const input = document.getElementById('msgInput');
+  const input = dom.msgInput;
   if (input.value.trim().length > 0) {
     if (!typingSent) {
       conn.send({ type: 'typing' });
@@ -339,14 +346,14 @@ function saveToHistory(msg) {
 function loadHistory() {
   try {
     const history = JSON.parse(localStorage.getItem('p2p-chat-history') || '[]');
-    const msgDiv = document.getElementById('messages');
+    const msgDiv = dom.messages;
     msgDiv.innerHTML = '';
     history.forEach(msg => {
       if (msg.type === 'text') {
         addMsg(msg.text, msg.author === 'You' ? 'sent' : 'received', msg.author);
       }
     });
-    document.getElementById('typingIndicator').style.display = 'none';
+    dom.typingIndicator.style.display = 'none';
   } catch (e) {
     console.log('Error loading history', e);
   }
@@ -354,7 +361,7 @@ function loadHistory() {
 
 // Clear chat history
 function clearChatHistory() {
-  document.getElementById('messages').innerHTML = '';
+  dom.messages.innerHTML = '';
   localStorage.removeItem('p2p-chat-history');
 }
 
@@ -374,7 +381,7 @@ function confirmClearChatHistory() {
 
 // Save username
 function saveUsername() {
-  const input = document.getElementById('usernameInput');
+  const input = dom.usernameInput;
   myUsername = input.value.trim() || 'Anonymous';
   localStorage.setItem('p2p-chat-username', myUsername);
   if (conn?.open) {
@@ -386,7 +393,7 @@ function saveUsername() {
 async function sendFile(fileOverride) {
   if (isSendingFile) return;
 
-  const fileInput = document.getElementById('fileInput');
+  const fileInput = dom.fileInput;
   const file = fileOverride || fileInput.files[0];
   if (!file || !conn?.open) return;
 
@@ -439,7 +446,7 @@ function addMsg(text, type, author = type === 'sent' ? 'You' : 'Peer') {
   const div = document.createElement('div');
   div.className = 'msg ' + type;
   div.innerHTML = escapeHtml(text) + '<div class="meta">' + author + ' · ' + timeNow() + '</div>';
-  document.getElementById('messages').appendChild(div);
+  dom.messages.appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -447,7 +454,7 @@ function addFileMsg(name, url, type) {
   const div = document.createElement('div');
   div.className = 'msg ' + type;
   div.innerHTML = '<a href="' + url + '" download="' + escapeHtml(name) + '" style="color:#53d769">' + escapeHtml(name) + '</a><div class="meta">' + (type === 'sent' ? 'You' : 'Peer') + ' · ' + timeNow() + '</div>';
-  document.getElementById('messages').appendChild(div);
+  dom.messages.appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -455,7 +462,7 @@ function addSystemMsg(text) {
   const div = document.createElement('div');
   div.className = 'system-msg';
   div.textContent = text;
-  document.getElementById('messages').appendChild(div);
+  dom.messages.appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -474,21 +481,21 @@ function addSystemActionMsg(text, actionLabel, actionHandler) {
 
   div.appendChild(textNode);
   div.appendChild(button);
-  document.getElementById('messages').appendChild(div);
+  dom.messages.appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
 function showProgress(visible, name = '') {
-  const progress = document.getElementById('progress');
+  const progress = dom.progress;
   progress.style.display = visible ? 'block' : 'none';
-  if (visible) document.getElementById('progressName').textContent = name;
+  if (visible) dom.progressName.textContent = name;
 }
 
 function updateProgress(ratio, transferred = 0, total = 0) {
   const percentage = Math.min(100, Math.round(ratio * 100));
-  document.getElementById('progressBar').style.width = percentage + '%';
-  document.getElementById('progressText').textContent = total ? formatBytes(transferred) + ' / ' + formatBytes(total) + ' (' + percentage + '%)' : percentage + '%';
-  document.getElementById('progressTrack').setAttribute('aria-valuenow', String(percentage));
+  dom.progressBar.style.width = percentage + '%';
+  dom.progressText.textContent = total ? formatBytes(transferred) + ' / ' + formatBytes(total) + ' (' + percentage + '%)' : percentage + '%';
+  dom.progressTrack.setAttribute('aria-valuenow', String(percentage));
 }
 
 function escapeHtml(t) {
@@ -509,7 +516,7 @@ function formatBytes(b) {
 
 // QR Code generation
 function generateQRCode(id) {
-  const container = document.getElementById('qrcode');
+  const container = dom.qrcode;
   container.innerHTML = '';
   new QRCode(container, {
     text: id,
@@ -519,7 +526,7 @@ function generateQRCode(id) {
     colorLight: '#0a1f3e',
     correctLevel: QRCode.CorrectLevel.M,
   });
-  document.getElementById('qrcodeContainer').style.display = 'block';
+  dom.qrcodeContainer.style.display = 'block';
 }
 
 // QR Code scanner
@@ -538,7 +545,7 @@ function openQRScanner() {
     (decodedText) => {
       if (qrScanHandled) return;
       qrScanHandled = true;
-      document.getElementById('peerId').value = decodedText.trim();
+      dom.peerId.value = decodedText.trim();
       closeQRScanner();
       connectToPeer();
     },
@@ -560,21 +567,21 @@ function closeQRScanner() {
 
 function openModal(modalId, focusTargetId) {
   lastFocusedElement = document.activeElement;
-  const modal = document.getElementById(modalId);
+  const modal = dom.byId(modalId);
   modal.hidden = false;
   modal.classList.add('is-open');
-  document.getElementById(focusTargetId).focus();
+  dom.byId(focusTargetId).focus();
 }
 
 function closeModal(modalId) {
-  const modal = document.getElementById(modalId);
+  const modal = dom.byId(modalId);
   modal.classList.remove('is-open');
   modal.hidden = true;
   lastFocusedElement?.focus();
 }
 
 function showToast(message) {
-  const toast = document.getElementById('toast');
+  const toast = dom.toast;
   toast.textContent = message;
   toast.hidden = false;
   clearTimeout(showToast.timeout);
@@ -582,7 +589,9 @@ function showToast(message) {
 }
 
 function setupUiInteractions() {
-  const chatInput = document.getElementById('chatInputContainer');
+  const chatInput = dom.chatInputContainer;
+
+  window.openFilePicker = () => dom.fileInput.click();
   ['dragenter', 'dragover'].forEach((eventName) => chatInput.addEventListener(eventName, (event) => {
     event.preventDefault();
     if (conn?.open) chatInput.classList.add('is-dragging');

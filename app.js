@@ -319,7 +319,6 @@ function disconnectPeer() {
   clearConnectionAttempt();
   resetTransientUi();
   if (activeConn) activeConn.close();
-  document.getElementById('peerId').value = '';
   updateConnectionUi('disconnected', 'Disconnected');
   clearChatHistory();
 }
@@ -525,19 +524,23 @@ function generateQRCode(id) {
 
 // QR Code scanner
 let _html5QrScanner = null;
+let qrScanHandled = false;
 
 function openQRScanner() {
-  const modal = document.getElementById('qrModal');
+  if (_html5QrScanner) return;
+
+  qrScanHandled = false;
   openModal('qrModal', 'closeQrBtn');
   _html5QrScanner = new Html5Qrcode('qr-reader');
   _html5QrScanner.start(
     { facingMode: 'environment' },
     { fps: 10, qrbox: { width: 240, height: 240 } },
     (decodedText) => {
+      if (qrScanHandled) return;
+      qrScanHandled = true;
       document.getElementById('peerId').value = decodedText.trim();
       closeQRScanner();
-      document.getElementById('toggleConnBtn').focus();
-      showToast('Peer ID added. Review it, then choose Connect.');
+      connectToPeer();
     },
     () => { /* scan misses are normal, ignore */ }
   ).catch((err) => {

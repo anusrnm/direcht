@@ -5,7 +5,19 @@
 let peer, conn;
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks for file transfer
 const CONNECTION_TIMEOUT_MS = 15000;
+const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000];
+const STORAGE_PREFIX = 'direcht';
+const USERNAME_STORAGE_KEY = `${STORAGE_PREFIX}-username`;
+const HISTORY_STORAGE_KEY = `${STORAGE_PREFIX}-history`;
+const PEER_ID_STORAGE_KEY = `${STORAGE_PREFIX}-last-peer-id`;
+const MESSAGE_QUEUE_STORAGE_KEY = `${STORAGE_PREFIX}-pending-messages`;
+const RECEIVED_MESSAGE_STORAGE_KEY = `${STORAGE_PREFIX}-received-message-ids`;
+const RESUME_STORAGE_KEY = `${STORAGE_PREFIX}-resume-enabled`;
 let connectionAttemptTimer = null;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let reconnecting = false;
+let manualDisconnect = false;
 let lastFocusedElement = null;
 
 function updateConnectionUi(state, message = '') {
@@ -49,6 +61,13 @@ function clearConnectionAttempt() {
   connectionAttemptTimer = null;
 }
 
+function clearReconnectAttempt() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  reconnectAttempt = 0;
+  reconnecting = false;
+}
+
 function startConnectionAttempt(activeConn) {
   clearConnectionAttempt();
   connectionAttemptTimer = setTimeout(() => {
@@ -65,6 +84,7 @@ function resetTransientUi() {
   typingSent = false;
   dom.typingIndicator.hidden = true;
   showProgress(false);
+  globalThis._incomingFile = null;
 }
 
 function hasActiveConnection() {
@@ -90,17 +110,72 @@ function generateRandomUsername() {
   return `${adj}${noun}${num}`;
 }
 
-let myUsername = localStorage.getItem('p2p-chat-username') || generateRandomUsername();
+let myUsername = localStorage.getItem(USERNAME_STORAGE_KEY) || generateRandomUsername();
 let peerUsername = 'Peer';
 let typingTimeout;
 let peerIsTyping = false;
 let lastFailedFile = null;
 let isSendingFile = false;
+let remotePeerId = localStorage.getItem(PEER_ID_STORAGE_KEY) || '';
+let resumeEnabled = localStorage.getItem(RESUME_STORAGE_KEY) !== 'false';
+const pendingMessages = new Map();
+const receivedMessageIds = new Set();
+
+function createId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function restoreSessionState() {
+  dom.peerId.value = remotePeerId;
+  loadHistory();
+  try {
+    const storedMessages = JSON.parse(localStorage.getItem(MESSAGE_QUEUE_STORAGE_KEY) || '[]');
+    storedMessages.forEach((message) => pendingMessages.set(message.id, message));
+    const storedReceivedIds = JSON.parse(localStorage.getItem(RECEIVED_MESSAGE_STORAGE_KEY) || '[]');
+    storedReceivedIds.forEach((id) => receivedMessageIds.add(id));
+  } catch (err) {
+    console.warn('Could not restore session state:', err);
+  }
+}
+
+function persistPendingMessages() {
+  localStorage.setItem(MESSAGE_QUEUE_STORAGE_KEY, JSON.stringify([...pendingMessages.values()]));
+}
+
+function persistReceivedMessageIds() {
+  localStorage.setItem(RECEIVED_MESSAGE_STORAGE_KEY, JSON.stringify([...receivedMessageIds].slice(-200)));
+}
+
+function sendPendingMessages(activeConn) {
+  pendingMessages.forEach((message) => {
+    if (activeConn.open) activeConn.send({ type: 'message', ...message });
+  });
+}
+
+function scheduleReconnect() {
+  if (manualDisconnect || reconnectTimer || conn || !remotePeerId || peer?.destroyed) return;
+  const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+  reconnectAttempt += 1;
+  reconnecting = true;
+  updateConnectionUi('waiting', `Reconnecting... attempt ${reconnectAttempt}`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (peer?.open) {
+      connectToPeer(true);
+    } else if (peer && !peer.destroyed) {
+      peer.reconnect();
+      scheduleReconnect();
+    }
+  }, delay);
+}
 
 // Initialize Peer
 peer = new Peer(); // auto-generated ID, free PeerJS cloud for signaling
 
 peer.on('open', (id) => {
+  const wasReconnecting = reconnecting;
+  reconnectAttempt = 0;
+  reconnecting = false;
   dom.myIdLoading.style.display = 'none';
   const el = dom.myId;
   el.style.display = 'block';
@@ -120,7 +195,8 @@ peer.on('open', (id) => {
   if (hasActiveConnection()) {
     updateConnectionUi('connected', 'Connected');
   } else if (!conn) {
-    updateConnectionUi('disconnected', 'Ready to connect');
+    if (remotePeerId && (wasReconnecting || resumeEnabled)) connectToPeer(true);
+    else updateConnectionUi('disconnected', 'Ready to connect');
   }
 });
 
@@ -139,6 +215,7 @@ peer.on('error', (err) => {
   pendingConnection?.close();
   const message = err?.type ? `${err.type}: ${err.message || 'Unknown error'}` : 'Connection error';
   updateConnectionUi('disconnected', message);
+  scheduleReconnect();
 });
 
 peer.on('disconnected', () => {
@@ -152,6 +229,7 @@ peer.on('disconnected', () => {
   if (peer && !peer.destroyed) {
     peer.reconnect();
   }
+  if (!hasActiveConnection()) scheduleReconnect();
 });
 
 peer.on('close', () => {
@@ -160,14 +238,28 @@ peer.on('close', () => {
     clearConnectionAttempt();
     resetTransientUi();
     updateConnectionUi('disconnected', 'Peer closed');
+    scheduleReconnect();
   }
 });
 
 // Accept incoming connections
 peer.on('connection', (incoming) => {
-  if (conn && conn !== incoming) conn.close();
+  if (conn && conn !== incoming) {
+    if (conn.open) {
+      incoming.close();
+      return;
+    }
+    conn.close();
+  }
   clearConnectionAttempt();
+  clearReconnectAttempt();
+  manualDisconnect = false;
   conn = incoming;
+  remotePeerId = incoming.peer;
+  resumeEnabled = true;
+  dom.peerId.value = remotePeerId;
+  localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
+  localStorage.setItem(RESUME_STORAGE_KEY, 'true');
   updateConnectionUi('waiting', 'Incoming connection...');
   setupConnection(incoming);
 });
@@ -183,7 +275,7 @@ function toggleConnection() {
   }
 }
 
-function connectToPeer() {
+function connectToPeer(isAutomatic = false) {
   const peerIdInput = dom.peerId;
   const remoteId = peerIdInput.value.trim();
   if (!remoteId) {
@@ -191,9 +283,17 @@ function connectToPeer() {
     return;
   }
   peerIdInput.value = remoteId;
+  remotePeerId = remoteId;
+  resumeEnabled = true;
+  localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
+  localStorage.setItem(RESUME_STORAGE_KEY, 'true');
   if (!peer?.open) {
     updateConnectionUi('disconnected', 'Signaling is not ready yet. Please try again shortly.');
     return;
+  }
+  if (!isAutomatic) {
+    manualDisconnect = false;
+    clearReconnectAttempt();
   }
   updateConnectionUi('waiting', 'Connecting...');
   try {
@@ -206,6 +306,7 @@ function connectToPeer() {
     conn = null;
     clearConnectionAttempt();
     updateConnectionUi('disconnected', 'Could not start the connection. Try again.');
+    scheduleReconnect();
   }
 }
 
@@ -214,16 +315,29 @@ function setupConnection(activeConn) {
   activeConn.on('open', () => {
     if (conn !== activeConn) return;
     clearConnectionAttempt();
+    clearReconnectAttempt();
     dom.peerId.value = activeConn.peer;
+    remotePeerId = activeConn.peer;
+    localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
     updateConnectionUi('connected', 'Connected');
     activeConn.send({ type: 'username', name: myUsername });
+    sendPendingMessages(activeConn);
   });
 
   activeConn.on('data', (data) => {
-    if (data.type === 'username') {
+    if (!data) return;
+    if (typeof data === 'string') {
+      addMessageFromPeer(activeConn, { id: null, text: data });
+    } else if (data.type === 'username') {
       peerUsername = data.name;
       dom.typingName.textContent = peerUsername;
       addSystemMsg(peerUsername + ' connected');
+    } else if (data.type === 'ack') {
+      pendingMessages.delete(data.id);
+      persistPendingMessages();
+    } else if (data.type === 'message') {
+      activeConn.send({ type: 'ack', id: data.id });
+      addMessageFromPeer(activeConn, data);
     } else if (data.type === 'typing') {
       peerIsTyping = true;
       dom.typingIndicator.hidden = false;
@@ -232,38 +346,26 @@ function setupConnection(activeConn) {
         peerIsTyping = false;
         dom.typingIndicator.hidden = true;
       }, 2000);
-    } else if (typeof data === 'string') {
-      peerIsTyping = false;
-      dom.typingIndicator.hidden = true;
-      addMsg(data, 'received', peerUsername);
     } else if (data.type === 'file-meta') {
       globalThis._incomingFile = {
+        transferId: data.transferId,
         name: data.name,
         size: data.size,
         mimeType: data.mimeType || 'application/octet-stream',
         lastModified: data.lastModified || Date.now(),
         chunks: [],
+        pendingChunks: new Map(),
         received: 0,
       };
       showProgress(true, 'Receiving ' + data.name);
       updateProgress(0, 0, data.size);
       addSystemMsg('Receiving file: ' + data.name + ' (' + formatBytes(data.size) + ')');
+      processIncomingFileChunks(globalThis._incomingFile);
     } else if (data.type === 'file-chunk') {
       const f = globalThis._incomingFile;
-      if (!f) return;
-      f.chunks.push(data.chunk);
-      f.received += data.chunk.byteLength;
-      updateProgress(f.received / f.size, f.received, f.size);
-      if (f.received >= f.size) {
-        const receivedFile = typeof File === 'function'
-          ? new File(f.chunks, f.name, { type: f.mimeType, lastModified: f.lastModified })
-          : new Blob(f.chunks, { type: f.mimeType });
-        const url = URL.createObjectURL(receivedFile);
-        addFileMsg(f.name, url, 'received');
-        saveToHistory({ type: 'file', author: peerUsername, filename: f.name, url, timestamp: new Date().toISOString() });
-        showProgress(false);
-        globalThis._incomingFile = null;
-      }
+      if (!f || f.transferId !== data.transferId) return;
+      f.pendingChunks.set(data.offset, data.chunk);
+      processIncomingFileChunks(f);
     }
   });
 
@@ -275,6 +377,7 @@ function setupConnection(activeConn) {
     updateConnectionUi('disconnected', 'Disconnected');
     addSystemMsg('Peer disconnected.');
     peerUsername = 'Peer';
+    scheduleReconnect();
   });
 
   activeConn.on('error', (err) => {
@@ -284,7 +387,40 @@ function setupConnection(activeConn) {
     resetTransientUi();
     updateConnectionUi('disconnected', 'Connection error');
     addSystemMsg('Connection error: ' + err);
+    scheduleReconnect();
   });
+}
+
+function addMessageFromPeer(activeConn, data) {
+  if (data.id && receivedMessageIds.has(data.id)) return;
+  if (data.id) {
+    receivedMessageIds.add(data.id);
+    persistReceivedMessageIds();
+  }
+  peerIsTyping = false;
+  dom.typingIndicator.hidden = true;
+  addMsg(data.text, 'received', peerUsername);
+  saveToHistory({ type: 'text', id: data.id, author: peerUsername, text: data.text, timestamp: data.timestamp || new Date().toISOString() });
+}
+
+function processIncomingFileChunks(fileState) {
+  while (fileState.pendingChunks.has(fileState.received)) {
+    const chunk = fileState.pendingChunks.get(fileState.received);
+    fileState.pendingChunks.delete(fileState.received);
+    fileState.chunks.push(chunk);
+    fileState.received += chunk.byteLength;
+  }
+  updateProgress(fileState.size ? fileState.received / fileState.size : 1, fileState.received, fileState.size);
+  if (fileState.received < fileState.size) return;
+
+  const receivedFile = typeof File === 'function'
+    ? new File(fileState.chunks, fileState.name, { type: fileState.mimeType, lastModified: fileState.lastModified })
+    : new Blob(fileState.chunks, { type: fileState.mimeType });
+  const url = URL.createObjectURL(receivedFile);
+  addFileMsg(fileState.name, url, 'received');
+  saveToHistory({ type: 'file', author: peerUsername, filename: fileState.name, url, timestamp: new Date().toISOString() });
+  showProgress(false);
+  globalThis._incomingFile = null;
 }
 
 // Send text message
@@ -292,9 +428,16 @@ function sendMessage() {
   const input = dom.msgInput;
   const text = input.value.trim();
   if (!text || !conn?.open) return;
-  conn.send(text);
+  const message = {
+    id: createId(),
+    text,
+    timestamp: new Date().toISOString(),
+  };
+  pendingMessages.set(message.id, message);
+  persistPendingMessages();
+  conn.send({ type: 'message', ...message });
   addMsg(text, 'sent', 'You');
-  saveToHistory({ type: 'text', author: 'You', text, timestamp: new Date().toISOString() });
+  saveToHistory({ type: 'text', author: 'You', text, timestamp: message.timestamp });
   input.value = '';
   peerIsTyping = false;
   dom.typingIndicator.hidden = true;
@@ -321,9 +464,13 @@ function onMessageInputBlur() {
   typingSent = false;
 }
 function disconnectPeer() {
+  manualDisconnect = true;
+  resumeEnabled = false;
+  localStorage.setItem(RESUME_STORAGE_KEY, 'false');
   const activeConn = conn;
   conn = null;
   clearConnectionAttempt();
+  clearReconnectAttempt();
   resetTransientUi();
   if (activeConn) activeConn.close();
   updateConnectionUi('disconnected', 'Disconnected');
@@ -333,10 +480,10 @@ function disconnectPeer() {
 // Save message to local storage
 function saveToHistory(msg) {
   try {
-    const history = JSON.parse(localStorage.getItem('p2p-chat-history') || '[]');
+    const history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
     history.push(msg);
     if (history.length > 100) history.shift();
-    localStorage.setItem('p2p-chat-history', JSON.stringify(history));
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch (e) {
     console.log('Storage limit exceeded', e);
   }
@@ -345,7 +492,7 @@ function saveToHistory(msg) {
 // Load chat history
 function loadHistory() {
   try {
-    const history = JSON.parse(localStorage.getItem('p2p-chat-history') || '[]');
+    const history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
     const msgDiv = dom.messages;
     msgDiv.innerHTML = '';
     history.forEach(msg => {
@@ -362,7 +509,7 @@ function loadHistory() {
 // Clear chat history
 function clearChatHistory() {
   dom.messages.innerHTML = '';
-  localStorage.removeItem('p2p-chat-history');
+  localStorage.removeItem(HISTORY_STORAGE_KEY);
 }
 
 function openClearHistoryDialog() {
@@ -383,7 +530,7 @@ function confirmClearChatHistory() {
 function saveUsername() {
   const input = dom.usernameInput;
   myUsername = input.value.trim() || 'Anonymous';
-  localStorage.setItem('p2p-chat-username', myUsername);
+  localStorage.setItem(USERNAME_STORAGE_KEY, myUsername);
   if (conn?.open) {
     conn.send({ type: 'username', name: myUsername });
   }
@@ -399,24 +546,29 @@ async function sendFile(fileOverride) {
 
   isSendingFile = true;
   lastFailedFile = null;
-
-  conn.send({
-    type: 'file-meta',
-    name: file.name,
-    size: file.size,
-    mimeType: file.type || 'application/octet-stream',
-    lastModified: file.lastModified || Date.now(),
-  });
-  addSystemMsg('Sending file: ' + file.name + ' (' + formatBytes(file.size) + ')');
-  showProgress(true, 'Sending ' + file.name);
+  const activeConn = conn;
+  const transferId = createId();
 
   let offset = 0;
 
   try {
+    activeConn.send({
+      type: 'file-meta',
+      transferId,
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      lastModified: file.lastModified || Date.now(),
+    });
+    addSystemMsg('Sending file: ' + file.name + ' (' + formatBytes(file.size) + ')');
+    showProgress(true, 'Sending ' + file.name);
+
     while (offset < file.size) {
+      if (conn !== activeConn || !activeConn.open) throw new Error('Connection lost during file transfer');
       const slice = file.slice(offset, offset + CHUNK_SIZE);
       const chunk = await slice.arrayBuffer();
-      conn.send({ type: 'file-chunk', chunk });
+      await waitForSendCapacity(activeConn);
+      activeConn.send({ type: 'file-chunk', transferId, offset, chunk });
       offset += chunk.byteLength;
       updateProgress(offset / file.size, offset, file.size);
     }
@@ -433,6 +585,14 @@ async function sendFile(fileOverride) {
     showProgress(false);
   } finally {
     isSendingFile = false;
+  }
+}
+
+async function waitForSendCapacity(activeConn) {
+  const dataChannel = activeConn.dataChannel || activeConn._dc;
+  while (dataChannel?.bufferedAmount > CHUNK_SIZE * 16) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (!activeConn.open) throw new Error('Connection lost during file transfer');
   }
 }
 
@@ -629,4 +789,5 @@ function setupUiInteractions() {
   window.lucide?.createIcons();
 }
 
+restoreSessionState();
 setupUiInteractions();

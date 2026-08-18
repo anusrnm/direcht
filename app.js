@@ -4,7 +4,9 @@
 
 let peer, conn;
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks for file transfer
+const MAX_FILE_SIZE = 250 * 1024 * 1024;
 const CONNECTION_TIMEOUT_MS = 15000;
+const SEND_BUFFER_WAIT_TIMEOUT_MS = 10000;
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000];
 const STORAGE_PREFIX = 'direcht';
 const USERNAME_STORAGE_KEY = `${STORAGE_PREFIX}-username`;
@@ -79,6 +81,7 @@ function startConnectionAttempt(activeConn) {
 
 function resetTransientUi() {
   clearTimeout(typingTimeout);
+  clearTimeout(typingRefreshTimer);
   peerIsTyping = false;
   typingSent = false;
   dom.typingIndicator.hidden = true;
@@ -113,6 +116,7 @@ let myUsername = localStorage.getItem(USERNAME_STORAGE_KEY) || generateRandomUse
 let peerUsername = 'Peer';
 let typingTimeout;
 let peerIsTyping = false;
+let typingRefreshTimer = null;
 let lastFailedFile = null;
 let isSendingFile = false;
 let remotePeerId = localStorage.getItem(PEER_ID_STORAGE_KEY) || '';
@@ -146,7 +150,7 @@ function persistReceivedMessageIds() {
 
 function sendPendingMessages(activeConn) {
   pendingMessages.forEach((message) => {
-    if (activeConn.open) activeConn.send({ type: 'message', ...message });
+    sendData(activeConn, { type: 'message', ...message });
   });
 }
 
@@ -216,7 +220,7 @@ peer.on('error', (err) => {
   pendingConnection?.close();
   const message = err?.type ? `${err.type}: ${err.message || 'Unknown error'}` : 'Connection error';
   updateConnectionUi('disconnected', message);
-  scheduleReconnect();
+  if (!manualDisconnect) scheduleReconnect();
 });
 
 peer.on('disconnected', () => {
@@ -241,7 +245,7 @@ peer.on('close', () => {
     clearConnectionAttempt();
     resetTransientUi();
     updateConnectionUi('disconnected', 'Peer closed');
-    scheduleReconnect();
+    if (!manualDisconnect) scheduleReconnect();
   }
 });
 
@@ -312,7 +316,7 @@ function connectToPeer(isAutomatic = false) {
     conn = null;
     clearConnectionAttempt();
     updateConnectionUi('disconnected', 'Could not start the connection. Try again.');
-    scheduleReconnect();
+    if (isAutomatic) scheduleReconnect();
   }
 }
 
@@ -326,11 +330,12 @@ function setupConnection(activeConn) {
     remotePeerId = activeConn.peer;
     localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
     updateConnectionUi('connected', 'Connected');
-    activeConn.send({ type: 'username', name: myUsername });
+    sendData(activeConn, { type: 'username', name: myUsername });
     sendPendingMessages(activeConn);
   });
 
   activeConn.on('data', (data) => {
+    if (conn !== activeConn) return;
     if (!data) return;
     if (typeof data === 'string') {
       addMessageFromPeer(activeConn, { id: null, text: data });
@@ -342,7 +347,7 @@ function setupConnection(activeConn) {
       pendingMessages.delete(data.id);
       persistPendingMessages();
     } else if (data.type === 'message') {
-      activeConn.send({ type: 'ack', id: data.id });
+      sendData(activeConn, { type: 'ack', id: data.id });
       addMessageFromPeer(activeConn, data);
     } else if (data.type === 'typing') {
       peerIsTyping = true;
@@ -353,9 +358,11 @@ function setupConnection(activeConn) {
         dom.typingIndicator.hidden = true;
       }, 2000);
     } else if (data.type === 'file-meta') {
+      if (!isValidFileMeta(data)) return;
       globalThis._incomingFile = {
         transferId: data.transferId,
         name: data.name,
+        author: data.author || peerUsername,
         size: data.size,
         mimeType: data.mimeType || 'application/octet-stream',
         lastModified: data.lastModified || Date.now(),
@@ -370,6 +377,7 @@ function setupConnection(activeConn) {
     } else if (data.type === 'file-chunk') {
       const f = globalThis._incomingFile;
       if (!f || f.transferId !== data.transferId) return;
+      if (!isValidFileChunk(data, f)) return;
       f.pendingChunks.set(data.offset, data.chunk);
       processIncomingFileChunks(f);
     }
@@ -383,7 +391,7 @@ function setupConnection(activeConn) {
     updateConnectionUi('disconnected', 'Disconnected');
     addSystemMsg('Peer disconnected.');
     peerUsername = 'Peer';
-    scheduleReconnect();
+    if (!manualDisconnect) scheduleReconnect();
   });
 
   activeConn.on('error', (err) => {
@@ -393,7 +401,7 @@ function setupConnection(activeConn) {
     resetTransientUi();
     updateConnectionUi('disconnected', 'Connection error');
     addSystemMsg('Connection error: ' + err);
-    scheduleReconnect();
+    if (!manualDisconnect) scheduleReconnect();
   });
 }
 
@@ -407,6 +415,23 @@ function addMessageFromPeer(activeConn, data) {
   dom.typingIndicator.hidden = true;
   addMsg(data.text, 'received', peerUsername);
   saveToHistory({ type: 'text', id: data.id, author: peerUsername, text: data.text, timestamp: data.timestamp || new Date().toISOString() });
+}
+
+function isValidFileMeta(data) {
+  return typeof data.transferId === 'string'
+    && typeof data.name === 'string'
+    && Number.isInteger(data.size)
+    && data.size >= 0
+    && data.size <= MAX_FILE_SIZE;
+}
+
+function isValidFileChunk(data, fileState) {
+  return Number.isInteger(data.offset)
+    && data.offset >= 0
+    && data.offset < fileState.size
+    && data.chunk?.byteLength > 0
+    && data.chunk.byteLength <= CHUNK_SIZE
+    && data.offset + data.chunk.byteLength <= fileState.size;
 }
 
 function processIncomingFileChunks(fileState) {
@@ -424,9 +449,20 @@ function processIncomingFileChunks(fileState) {
     : new Blob(fileState.chunks, { type: fileState.mimeType });
   const url = URL.createObjectURL(receivedFile);
   addFileMsg(fileState.name, url, 'received');
-  saveToHistory({ type: 'file', author: peerUsername, filename: fileState.name, url, timestamp: new Date().toISOString() });
+  saveToHistory({ type: 'file', author: fileState.author, filename: fileState.name, url, timestamp: new Date().toISOString() });
   showProgress(false);
   globalThis._incomingFile = null;
+}
+
+function sendData(activeConn, data) {
+  if (!activeConn?.open) return false;
+  try {
+    activeConn.send(data);
+    return true;
+  } catch (err) {
+    console.error('Data send failed:', err);
+    return false;
+  }
 }
 
 // Send text message
@@ -441,7 +477,10 @@ function sendMessage() {
   };
   pendingMessages.set(message.id, message);
   persistPendingMessages();
-  conn.send({ type: 'message', ...message });
+  if (!sendData(conn, { type: 'message', ...message })) {
+    showToast('Message could not be sent. It will be retried.');
+    return;
+  }
   addMsg(text, 'sent', 'You');
   saveToHistory({ type: 'text', author: 'You', text, timestamp: message.timestamp });
   input.value = '';
@@ -457,8 +496,13 @@ function onMessageInput() {
   const input = dom.msgInput;
   if (input.value.trim().length > 0) {
     if (!typingSent) {
-      conn.send({ type: 'typing' });
+      sendData(conn, { type: 'typing' });
       typingSent = true;
+      clearTimeout(typingRefreshTimer);
+      typingRefreshTimer = setTimeout(() => {
+        typingSent = false;
+        onMessageInput();
+      }, 1500);
     }
   } else {
     typingSent = false;
@@ -468,6 +512,7 @@ function onMessageInput() {
 // Clear typing flag when focus leaves input
 function onMessageInputBlur() {
   typingSent = false;
+  clearTimeout(typingRefreshTimer);
 }
 function disconnectPeer() {
   manualDisconnect = true;
@@ -475,6 +520,8 @@ function disconnectPeer() {
   conn = null;
   clearConnectionAttempt();
   clearReconnectAttempt();
+  pendingMessages.clear();
+  persistPendingMessages();
   resetTransientUi();
   if (activeConn) activeConn.close();
   updateConnectionUi('disconnected', 'Disconnected');
@@ -490,6 +537,7 @@ function saveToHistory(msg) {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch (e) {
     console.log('Storage limit exceeded', e);
+    showToast('Chat history could not be saved. Storage is full.');
   }
 }
 
@@ -536,7 +584,7 @@ function saveUsername() {
   myUsername = input.value.trim() || 'Anonymous';
   localStorage.setItem(USERNAME_STORAGE_KEY, myUsername);
   if (conn?.open) {
-    conn.send({ type: 'username', name: myUsername });
+    sendData(conn, { type: 'username', name: myUsername });
   }
 }
 
@@ -547,6 +595,10 @@ async function sendFile(fileOverride) {
   const fileInput = dom.fileInput;
   const file = fileOverride || fileInput.files[0];
   if (!file || !conn?.open) return;
+  if (file.size > MAX_FILE_SIZE) {
+    showToast('Files must be 250 MB or smaller.');
+    return;
+  }
 
   isSendingFile = true;
   lastFailedFile = null;
@@ -559,6 +611,7 @@ async function sendFile(fileOverride) {
     activeConn.send({
       type: 'file-meta',
       transferId,
+      author: myUsername,
       name: file.name,
       size: file.size,
       mimeType: file.type || 'application/octet-stream',
@@ -594,7 +647,9 @@ async function sendFile(fileOverride) {
 
 async function waitForSendCapacity(activeConn) {
   const dataChannel = activeConn.dataChannel || activeConn._dc;
+  const deadline = Date.now() + SEND_BUFFER_WAIT_TIMEOUT_MS;
   while (dataChannel?.bufferedAmount > CHUNK_SIZE * 16) {
+    if (Date.now() >= deadline) throw new Error('Send buffer did not drain');
     await new Promise((resolve) => setTimeout(resolve, 25));
     if (!activeConn.open) throw new Error('Connection lost during file transfer');
   }
@@ -792,6 +847,15 @@ function setupUiInteractions() {
   });
   window.lucide?.createIcons();
 }
+
+window.addEventListener('pagehide', () => {
+  const activeConn = conn;
+  conn = null;
+  clearConnectionAttempt();
+  clearReconnectAttempt();
+  activeConn?.close();
+  if (peer && !peer.destroyed) peer.disconnect();
+});
 
 restoreSessionState();
 setupUiInteractions();

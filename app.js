@@ -219,6 +219,8 @@ peer.on('error', (err) => {
 });
 
 peer.on('disconnected', () => {
+  if (manualDisconnect) return;
+
   if (hasActiveConnection()) {
     updateConnectionUi('connected', 'Reconnected');
   } else {
@@ -226,7 +228,7 @@ peer.on('disconnected', () => {
   }
 
   // Best effort reconnect to signaling server.
-  if (peer && !peer.destroyed) {
+  if (!manualDisconnect && peer && !peer.destroyed) {
     peer.reconnect();
   }
   if (!hasActiveConnection()) scheduleReconnect();
@@ -500,7 +502,7 @@ function loadHistory() {
         addMsg(msg.text, msg.author === 'You' ? 'sent' : 'received', msg.author);
       }
     });
-    dom.typingIndicator.style.display = 'none';
+    dom.typingIndicator.hidden = true;
   } catch (e) {
     console.log('Error loading history', e);
   }

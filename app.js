@@ -12,7 +12,6 @@ const HISTORY_STORAGE_KEY = `${STORAGE_PREFIX}-history`;
 const PEER_ID_STORAGE_KEY = `${STORAGE_PREFIX}-last-peer-id`;
 const MESSAGE_QUEUE_STORAGE_KEY = `${STORAGE_PREFIX}-pending-messages`;
 const RECEIVED_MESSAGE_STORAGE_KEY = `${STORAGE_PREFIX}-received-message-ids`;
-const RESUME_STORAGE_KEY = `${STORAGE_PREFIX}-resume-enabled`;
 let connectionAttemptTimer = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
@@ -117,7 +116,6 @@ let peerIsTyping = false;
 let lastFailedFile = null;
 let isSendingFile = false;
 let remotePeerId = localStorage.getItem(PEER_ID_STORAGE_KEY) || '';
-let resumeEnabled = localStorage.getItem(RESUME_STORAGE_KEY) !== 'false';
 const pendingMessages = new Map();
 const receivedMessageIds = new Set();
 
@@ -199,8 +197,7 @@ peer.on('open', (id) => {
   if (hasActiveConnection()) {
     updateConnectionUi('connected', 'Connected');
   } else if (!conn && !manualDisconnect) {
-    if (remotePeerId && (wasReconnecting || resumeEnabled)) connectToPeer(true);
-    else updateConnectionUi('disconnected', 'Ready to connect');
+    updateConnectionUi('disconnected', wasReconnecting ? 'Ready to reconnect' : 'Ready to connect');
   }
 });
 
@@ -267,10 +264,8 @@ peer.on('connection', (incoming) => {
   manualDisconnect = false;
   conn = incoming;
   remotePeerId = incoming.peer;
-  resumeEnabled = true;
   dom.peerId.value = remotePeerId;
   localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
-  localStorage.setItem(RESUME_STORAGE_KEY, 'true');
   updateConnectionUi('waiting', 'Incoming connection...');
   setupConnection(incoming);
 });
@@ -297,9 +292,7 @@ function connectToPeer(isAutomatic = false) {
   }
   peerIdInput.value = remoteId;
   remotePeerId = remoteId;
-  resumeEnabled = true;
   localStorage.setItem(PEER_ID_STORAGE_KEY, remotePeerId);
-  localStorage.setItem(RESUME_STORAGE_KEY, 'true');
   if (!peer?.open) {
     updateConnectionUi('disconnected', 'Signaling is not ready yet. Please try again shortly.');
     return;
@@ -478,8 +471,6 @@ function onMessageInputBlur() {
 }
 function disconnectPeer() {
   manualDisconnect = true;
-  resumeEnabled = false;
-  localStorage.setItem(RESUME_STORAGE_KEY, 'false');
   const activeConn = conn;
   conn = null;
   clearConnectionAttempt();

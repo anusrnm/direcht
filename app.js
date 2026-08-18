@@ -160,6 +160,10 @@ function scheduleReconnect() {
   updateConnectionUi('waiting', `Reconnecting... attempt ${reconnectAttempt}`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
+    if (manualDisconnect) {
+      reconnecting = false;
+      return;
+    }
     if (peer?.open) {
       connectToPeer(true);
     } else if (peer && !peer.destroyed) {
@@ -194,7 +198,7 @@ peer.on('open', (id) => {
   dom.usernameInput.value = myUsername;
   if (hasActiveConnection()) {
     updateConnectionUi('connected', 'Connected');
-  } else if (!conn) {
+  } else if (!conn && !manualDisconnect) {
     if (remotePeerId && (wasReconnecting || resumeEnabled)) connectToPeer(true);
     else updateConnectionUi('disconnected', 'Ready to connect');
   }
@@ -246,6 +250,11 @@ peer.on('close', () => {
 
 // Accept incoming connections
 peer.on('connection', (incoming) => {
+  if (manualDisconnect) {
+    incoming.close();
+    return;
+  }
+
   if (conn && conn !== incoming) {
     if (conn.open) {
       incoming.close();
@@ -278,6 +287,8 @@ function toggleConnection() {
 }
 
 function connectToPeer(isAutomatic = false) {
+  if (isAutomatic && manualDisconnect) return;
+
   const peerIdInput = dom.peerId;
   const remoteId = peerIdInput.value.trim();
   if (!remoteId) {

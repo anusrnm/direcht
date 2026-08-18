@@ -251,10 +251,9 @@ peer.on('close', () => {
 
 // Accept incoming connections
 peer.on('connection', (incoming) => {
-  if (manualDisconnect) {
-    incoming.close();
-    return;
-  }
+  // A manual disconnect stops automatic retries, but does not reject a new
+  // connection initiated explicitly by the other peer.
+  manualDisconnect = false;
 
   if (conn && conn !== incoming) {
     if (conn.open) {
@@ -265,7 +264,6 @@ peer.on('connection', (incoming) => {
   }
   clearConnectionAttempt();
   clearReconnectAttempt();
-  manualDisconnect = false;
   conn = incoming;
   remotePeerId = incoming.peer;
   dom.peerId.value = remotePeerId;

@@ -58,6 +58,10 @@ async function openApp(page) {
         return this.lastConnection;
       }
 
+      createIncoming(peerId) {
+        return new MockConnection(peerId);
+      }
+
       reconnect() {
         this.reconnectCalls += 1;
       }
@@ -154,6 +158,115 @@ test.describe('Direcht chat', () => {
     await page.waitForTimeout(1200);
     await expect.poll(() => page.evaluate(() => window.__mockPeer.reconnectCalls)).toBe(reconnectCalls);
     await expect(page.locator('#toggleConnBtn')).toHaveText('Connect');
+  });
+
+  test('accepts a new incoming connection after local disconnect', async ({ page }) => {
+    await openApp(page);
+    await connect(page);
+
+    await page.locator('#toggleConnBtn').click();
+    const incoming = await page.evaluate(() => {
+      const connection = window.__mockPeer.createIncoming('remote-peer-id');
+      window.__mockPeer.emit('connection', connection);
+      connection.emit('open');
+      return { open: connection.open, peer: connection.peer };
+    });
+
+    expect(incoming).toEqual({ open: true, peer: 'remote-peer-id' });
+    await expect(page.locator('#connStatus')).toHaveText('Connected');
+    await expect(page.locator('#peerId')).toHaveValue('remote-peer-id');
+  });
+
+  test('reconnects after the active peer closes the data channel', async ({ page }) => {
+    await openApp(page);
+    await connect(page);
+
+    await page.evaluate(() => window.__mockPeer.lastConnection.emit('close'));
+    await expect(page.locator('#connStatus')).toHaveText(/Reconnecting/);
+    await page.waitForTimeout(1100);
+    await expect.poll(() => page.evaluate(() => window.__mockPeer.lastConnection?.peer)).toBe('remote-peer-id');
+    await page.evaluate(() => window.__mockPeer.lastConnection.emit('open'));
+    await expect(page.locator('#connStatus')).toHaveText('Connected');
+  });
+
+  test('ignores data from a replaced stale connection', async ({ page }) => {
+    await openApp(page);
+    await page.locator('#peerId').fill('remote-peer-id');
+    await page.locator('#toggleConnBtn').click();
+
+    await page.evaluate(() => {
+      const stale = window.__mockPeer.lastConnection;
+      const incoming = window.__mockPeer.createIncoming('remote-peer-id');
+      window.__mockPeer.emit('connection', incoming);
+      incoming.emit('open');
+      stale.emit('data', { type: 'message', id: 'stale-message', text: 'Should be ignored' });
+      incoming.emit('data', { type: 'message', id: 'active-message', text: 'Should be shown' });
+    });
+
+    await expect(page.locator('.msg.received')).toContainText('Should be shown');
+    await expect(page.locator('.msg.received')).not.toContainText('Should be ignored');
+  });
+
+  test('clears unacknowledged messages on explicit disconnect', async ({ page }) => {
+    await openApp(page);
+    await connect(page);
+
+    await page.locator('#msgInput').fill('Pending message');
+    await page.locator('#sendBtn').click();
+    await page.locator('#toggleConnBtn').click();
+
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('direcht-pending-messages'))).toBe('[]');
+  });
+
+  test('rejects invalid file chunks without producing a file', async ({ page }) => {
+    await openApp(page);
+    await connect(page);
+
+    await page.evaluate(() => {
+      const connection = window.__mockPeer.lastConnection;
+      connection.emit('data', {
+        type: 'file-meta',
+        transferId: 'file-validation',
+        name: 'invalid.txt',
+        size: 3,
+        mimeType: 'text/plain',
+      });
+      connection.emit('data', {
+        type: 'file-chunk',
+        transferId: 'file-validation',
+        offset: -1,
+        chunk: new TextEncoder().encode('bad').buffer,
+      });
+    });
+
+    await expect(page.locator('#messages a[download="invalid.txt"]')).toHaveCount(0);
+  });
+
+  test('restores the saved peer ID and text history without connecting', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('direcht-last-peer-id', 'saved-peer-id');
+      localStorage.setItem('direcht-history', JSON.stringify([
+        { type: 'text', author: 'Peer', text: 'Restored message' },
+      ]));
+    });
+    await openApp(page);
+
+    await expect(page.locator('#peerId')).toHaveValue('saved-peer-id');
+    await expect(page.locator('.msg.received')).toContainText('Restored message');
+    await expect(page.locator('#toggleConnBtn')).toHaveText('Connect');
+    expect(await page.evaluate(() => window.__mockPeer.lastConnection)).toBeNull();
+  });
+
+  test('does not retry a failed manual connection', async ({ page }) => {
+    await openApp(page);
+    await page.evaluate(() => {
+      window.__mockPeer.connect = () => { throw new Error('manual failure'); };
+    });
+    await page.locator('#peerId').fill('remote-peer-id');
+    await page.locator('#toggleConnBtn').click();
+    await expect(page.locator('#connStatus')).toHaveText('Could not start the connection. Try again.');
+    await page.waitForTimeout(1200);
+    await expect.poll(() => page.evaluate(() => window.__mockPeer.reconnectCalls)).toBe(0);
   });
 
   test('opens and closes QR and clear-history dialogs', async ({ page }) => {

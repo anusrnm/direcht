@@ -2,7 +2,8 @@
   "name": "direcht",
   "private": true,
   "scripts": {
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:real": "playwright test tests/real-peer.spec.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0"

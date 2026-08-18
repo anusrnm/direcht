@@ -23,4 +23,6 @@ const dom = {
   qrcodeContainer: document.getElementById('qrcodeContainer'),
   chatInputContainer: document.getElementById('chatInputContainer'),
   toast: document.getElementById('toast'),
+  filePreviewName: document.getElementById('filePreviewName'),
+  filePreviewContent: document.getElementById('filePreviewContent'),
 };

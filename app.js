@@ -385,7 +385,7 @@ function processIncomingFileChunks(fileState) {
     ? new File(fileState.chunks, fileState.name, { type: fileState.mimeType, lastModified: fileState.lastModified })
     : new Blob(fileState.chunks, { type: fileState.mimeType });
   const url = URL.createObjectURL(receivedFile);
-  addFileMsg(fileState.name, url, 'received');
+  addFileMsg(fileState.name, url, 'received', receivedFile);
   saveToHistory({ type: 'file', author: fileState.author, filename: fileState.name, url, timestamp: new Date().toISOString() });
   showProgress(false);
   globalThis._incomingFile = null;
@@ -525,21 +525,37 @@ function saveUsername() {
 
 // Send file via data channel
 async function sendFile(fileOverride) {
-  if (isSendingFile) return;
+  const files = fileOverride ? [fileOverride] : [...dom.fileInput.files];
+  await sendFiles(files);
+}
 
-  const fileInput = dom.fileInput;
-  const file = fileOverride || fileInput.files[0];
-  if (!file || !conn?.open) return;
-  if (file.size > MAX_FILE_SIZE) {
-    showToast('Files must be 250 MB or smaller.');
+async function sendFiles(files) {
+  if (isSendingFile || !conn?.open) return;
+
+  const selectedFiles = [...files].filter(Boolean);
+  if (!selectedFiles.length) return;
+  const oversizedFile = selectedFiles.find((file) => file.size > MAX_FILE_SIZE);
+  if (oversizedFile) {
+    showToast(oversizedFile.name + ' is larger than 250 MB.');
     return;
   }
 
   isSendingFile = true;
   lastFailedFile = null;
+  try {
+    for (const file of selectedFiles) {
+      await sendSingleFile(file);
+      if (!conn?.open) break;
+    }
+    dom.fileInput.value = '';
+  } finally {
+    isSendingFile = false;
+  }
+}
+
+async function sendSingleFile(file) {
   const activeConn = conn;
   const transferId = createId();
-
   let offset = 0;
 
   try {
@@ -568,15 +584,12 @@ async function sendFile(fileOverride) {
     addMsg('Sent file: ' + file.name, 'sent', 'You');
     saveToHistory({ type: 'file', author: 'You', filename: file.name, timestamp: new Date().toISOString() });
     showProgress(false);
-    fileInput.value = '';
     lastFailedFile = null;
   } catch (err) {
     console.error('File send failed:', err);
     lastFailedFile = file;
     addSystemActionMsg('File transfer failed: ' + file.name, 'Retry', 'retryLastFailedFile()');
     showProgress(false);
-  } finally {
-    isSendingFile = false;
   }
 }
 
@@ -604,12 +617,46 @@ function addMsg(text, type, author = type === 'sent' ? 'You' : 'Peer') {
   div.scrollIntoView({ behavior: 'smooth' });
 }
 
-function addFileMsg(name, url, type) {
+function isTextFile(name, mimeType = '') {
+  const textMimeType = mimeType.toLowerCase().split(';', 1)[0];
+  if (textMimeType.startsWith('text/')) return true;
+  return /\.(txt|md|markdown|diff|patch|log|csv|json|xml|html?|css|js|ts|jsx|tsx|yaml|yml|ini|conf|config|properties|sh|bat|ps1|sql)$/i.test(name);
+}
+
+function addFileMsg(name, url, type, file = null) {
   const div = document.createElement('div');
   div.className = 'msg ' + type;
-  div.innerHTML = '<a href="' + url + '" download="' + escapeHtml(name) + '" style="color:#53d769">' + escapeHtml(name) + '</a><div class="meta">' + (type === 'sent' ? 'You' : 'Peer') + ' · ' + timeNow() + '</div>';
+  const fileLink = document.createElement('a');
+  fileLink.href = url;
+  fileLink.download = name;
+  fileLink.style.color = '#53d769';
+  fileLink.textContent = name;
+  div.appendChild(fileLink);
+  if (file && isTextFile(name, file.type)) {
+    const previewButton = document.createElement('button');
+    previewButton.type = 'button';
+    previewButton.className = 'btn-secondary file-preview-btn';
+    previewButton.textContent = 'Preview';
+    previewButton.addEventListener('click', () => previewTextFile(name, file));
+    div.appendChild(previewButton);
+  }
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = (type === 'sent' ? 'You' : 'Peer') + ' · ' + timeNow();
+  div.appendChild(meta);
   dom.messages.appendChild(div);
   div.scrollIntoView({ behavior: 'smooth' });
+}
+
+function previewTextFile(name, file) {
+  dom.filePreviewName.textContent = name;
+  dom.filePreviewContent.textContent = 'Loading...';
+  openModal('filePreviewModal', 'closeFilePreviewBtn');
+  file.text().then((text) => {
+    if (dom.filePreviewName.textContent === name) dom.filePreviewContent.textContent = text;
+  }).catch(() => {
+    dom.filePreviewContent.textContent = 'Unable to preview this file.';
+  });
 }
 
 function addSystemMsg(text) {
@@ -755,14 +802,14 @@ function setupUiInteractions() {
     chatInput.classList.remove('is-dragging');
   }));
   chatInput.addEventListener('drop', (event) => {
-    const [file] = event.dataTransfer.files;
-    if (file) sendFile(file);
+    sendFiles(event.dataTransfer.files);
   });
   document.addEventListener('keydown', (event) => {
     const openModalElement = document.querySelector('.modal.is-open');
     if (!openModalElement) return;
     if (event.key === 'Escape') {
       if (openModalElement.id === 'qrModal') closeQRScanner();
+      else if (openModalElement.id === 'filePreviewModal') closeModal('filePreviewModal');
       else closeClearHistoryDialog();
       return;
     }

@@ -247,7 +247,6 @@
 
     .status {
       display: inline-flex;
-      margin-top: 12px;
       padding: 6px 9px;
       border-radius: 4px;
       font: 650 var(--font-size-status) var(--font-body);
@@ -285,7 +284,6 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin: 0 0 12px;
       padding: 4px 2px 12px;
       border-bottom: 1px solid rgba(174, 187, 210, .12);
     }
@@ -293,23 +291,6 @@
     .chat-peer {
       display: flex;
       align-items: center;
-    }
-
-    .peer-avatar {
-      display: grid;
-      flex: 0 0 34px;
-      place-items: center;
-      width: 34px;
-      height: 34px;
-      border: 1px solid rgba(83, 215, 105, .45);
-      border-radius: 50%;
-      color: var(--success);
-      background: rgba(83, 215, 105, .1);
-    }
-
-    .peer-avatar svg {
-      width: 17px;
-      height: 17px;
     }
 
     .chat-connection {
@@ -532,6 +513,30 @@
       line-height: 1.5;
     }
 
+    .file-preview-panel {
+      width: min(100%, 760px);
+    }
+
+    .file-preview-content {
+      max-height: min(60dvh, 560px);
+      margin: 16px 0 0;
+      overflow: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(7, 20, 45, .65);
+      color: var(--text);
+      font: .9rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .file-preview-btn {
+      margin-left: 8px;
+      padding: 4px 9px;
+      font-size: .8rem;
+    }
+
     #qr-reader {
       margin-top: 16px;
       overflow: hidden;
@@ -649,15 +654,15 @@
     <div>
       <div class="title-row">
         <h1>Direcht</h1>
-        <span class="version">v1.3.5</span>
+        <span class="version">v1.4.0</span>
       </div>
       <p class="subtitle">Private browser-to-browser chat via WebRTC</p>
     </div>
   </header>
 
   <main class="container">
-    <section class="card identity-card" aria-label="Your peer details">
-      <label class="card-boundary-label" for="myId">Your ID</label>
+    <fieldset class="card identity-card" aria-label="Your peer details">
+      <legend class="card-boundary-label" id="myIdLabel">Your ID</legend>
       <div class="card-header identity-header">
         <input type="text" id="usernameInput" class="display-name-input" placeholder="Display name"
           aria-label="Display name" onchange="saveUsername()" onkeydown="if(event.key==='Enter') saveUsername()">
@@ -666,19 +671,16 @@
         <div id="qrcode" style="display:inline-block; padding:10px; background:#0a1f3e; border-radius:6px;"></div>
       </div>
       <div class="field">
-        <p id="myIdLoading" class="status waiting">Connecting to signaling...</p><input type="text" id="myId"
-          class="id-display" style="display:none" title="Click to copy your Peer ID" readonly
+        <p id="myIdLoading" class="status waiting">Connecting to signaling...</p>
+        <input type="text" id="myId" class="id-display" style="display:none" title="Click to copy your Peer ID" readonly
           aria-label="My ID" aria-describedby="copyHint">
         <p id="copyHint" class="history-note">Share this ID with the peer or ask to scan the QR code.</p>
       </div>
-    </section>
+    </fieldset>
 
     <fieldset class="card chat-card" id="chatArea" data-state="idle" aria-labelledby="chatHeading">
       <legend class="card-boundary-label" id="chatHeading">Chat &amp; File Transfer</legend>
       <div class="chat-topbar">
-        <div class="chat-peer">
-          <span class="peer-avatar" aria-hidden="true"><i data-lucide="shield-check"></i></span>
-        </div>
         <div class="chat-connection" aria-label="Connect to a peer">
           <input type="text" id="peerId" class="peer-id" placeholder="Paste their Peer ID"
             onkeydown="if(event.key==='Enter') toggleConnection()"><button id="scanQRBtn" class="btn-secondary"
@@ -688,7 +690,7 @@
       </div>
       <p id="connStatus" class="status disconnected" role="status" aria-live="polite" aria-atomic="true">Waiting for a
         connection</p>
-      <div class="empty-state" id="chatEmptyState"><strong>Ready when you are</strong><span>Connect to a peer above to
+      <div class="empty-state" id="chatEmptyState"><strong>Ready</strong><span>Connect to a peer above to
           start a private conversation.</span></div>
       <div id="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
       <p class="history-note">Recent messages are stored on this device and cleared when you disconnect.</p>
@@ -707,7 +709,7 @@
           onkeydown="if(event.key==='Enter') sendMessage()" oninput="onMessageInput()" onblur="onMessageInputBlur()">
         <button class="icon-btn" id="sendBtn" type="button" disabled onclick="sendMessage()" aria-label="Send message"
           title="Send message"><i data-lucide="send"></i></button>
-        <input type="file" id="fileInput" hidden onchange="sendFile()">
+        <input type="file" id="fileInput" multiple hidden onchange="sendFiles(this.files)">
         <button class="icon-btn" id="fileBtn" type="button" disabled
           onclick="openFilePicker()" aria-label="Attach a file" title="Attach a file"><i
             data-lucide="paperclip"></i></button>
@@ -735,6 +737,15 @@
       <div class="modal-actions"><button id="cancelClearBtn" type="button" class="btn-secondary"
           onclick="closeClearHistoryDialog()">Cancel</button><button type="button" class="btn-danger"
           onclick="confirmClearChatHistory()">Clear history</button></div>
+    </div>
+  </div>
+  <div id="filePreviewModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="filePreviewTitle" hidden>
+    <div class="modal-panel file-preview-panel">
+      <h3 id="filePreviewTitle">Text file preview</h3>
+      <p id="filePreviewName"></p>
+      <pre id="filePreviewContent" class="file-preview-content"></pre>
+      <div class="modal-actions"><button id="closeFilePreviewBtn" type="button" class="btn-secondary"
+          onclick="closeModal('filePreviewModal')">Close</button></div>
     </div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

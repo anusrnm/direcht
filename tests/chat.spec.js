@@ -142,6 +142,26 @@ test.describe('Direcht chat', () => {
     });
     await expect(page.locator('.msg.received').filter({ hasText: 'Hello back' })).toBeVisible();
     await expect(page.locator('#messages a[download="note.txt"]')).toBeVisible();
+    await page.locator('.msg.received .file-preview-btn').click();
+    await expect(page.locator('#filePreviewModal')).toBeVisible();
+    await expect(page.locator('#filePreviewName')).toHaveText('note.txt');
+    await expect(page.locator('#filePreviewContent')).toHaveText('hey');
+  });
+
+  test('transfers multiple selected files sequentially', async ({ page }) => {
+    await openApp(page);
+    await connect(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('one') },
+      { name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('two') },
+    ]);
+
+    await expect.poll(() => page.evaluate(() => window.__mockPeer.lastConnection.sent
+      .filter((data) => data.type === 'file-meta')
+      .map((data) => data.name))).toEqual(['first.txt', 'second.txt']);
+    await expect(page.locator('.msg.sent').filter({ hasText: 'Sent file: first.txt' })).toBeVisible();
+    await expect(page.locator('.msg.sent').filter({ hasText: 'Sent file: second.txt' })).toBeVisible();
   });
 
   test('explicit disconnect does not reconnect through queued signaling events', async ({ page }) => {
